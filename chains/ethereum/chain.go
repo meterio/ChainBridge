@@ -25,6 +25,7 @@ import (
 	"math/big"
 
 	bridge "github.com/ChainSafe/ChainBridge/bindings/Bridge"
+	"github.com/ChainSafe/ChainBridge/bindings/ERC20"
 	erc20Handler "github.com/ChainSafe/ChainBridge/bindings/ERC20Handler"
 	erc721Handler "github.com/ChainSafe/ChainBridge/bindings/ERC721Handler"
 	"github.com/ChainSafe/ChainBridge/bindings/GenericHandler"
@@ -56,6 +57,7 @@ type Connection interface {
 	Client() *ethclient.Client
 	EnsureHasBytecode(address common.Address) error
 	LatestBlock() (*big.Int, error)
+	LatestFinalizedBlock() (*big.Int, error)
 	WaitForBlock(block *big.Int, delay *big.Int) error
 	Close()
 }
@@ -108,7 +110,7 @@ func InitializeChain(chainCfg *core.ChainConfig, logger log15.Logger, sysErr cha
 	}
 
 	stop := make(chan int)
-	conn := connection.NewConnection(cfg.endpoint, cfg.http, kp, logger, cfg.gasLimit, cfg.maxGasPrice, cfg.gasMultiplier, cfg.egsApiKey, cfg.egsSpeed)
+	conn := connection.NewConnection(cfg.endpoint, cfg.http, kp, logger, cfg.gasLimit, cfg.maxGasPrice, cfg.gasMultiplier, cfg.egsApiKey, cfg.egsSpeed, cfg.moonbeamFinality)
 	err = conn.Connect()
 	if err != nil {
 		return nil, err
@@ -161,6 +163,20 @@ func InitializeChain(chainCfg *core.ChainConfig, logger log15.Logger, sysErr cha
 		return nil, err
 	}
 
+	var airDropErc20Contract *ERC20.ERC20
+	if cfg.airDropErc20Contract != utils.ZeroAddress {
+
+		err = conn.EnsureHasBytecode(cfg.airDropErc20Contract)
+		if err != nil {
+			return nil, err
+		}
+
+		airDropErc20Contract, err = ERC20.NewERC20(cfg.airDropErc20Contract, conn.Client())
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if chainCfg.LatestBlock {
 		curr, err := conn.LatestBlock()
 		if err != nil {
@@ -174,6 +190,10 @@ func InitializeChain(chainCfg *core.ChainConfig, logger log15.Logger, sysErr cha
 
 	writer := NewWriter(conn, cfg, logger, stop, sysErr, m)
 	writer.setContract(bridgeContract)
+
+	if cfg.airDropErc20Contract != utils.ZeroAddress {
+		writer.setAirdropErc20Contract(airDropErc20Contract)
+	}
 
 	return &Chain{
 		cfg:      chainCfg,

@@ -108,7 +108,9 @@ func (l *listener) pollBlocks() error {
 				return nil
 			}
 
-			latestBlock, err := l.conn.LatestBlock()
+			var latestBlock *big.Int
+			var err error
+			latestBlock, err = l.conn.LatestBlock()
 			if err != nil {
 				l.log.Error("Unable to get latest block", "block", currentBlock, "err", err)
 				retry--
@@ -186,7 +188,7 @@ func (l *listener) getDepositEventsForBlock(latestBlock *big.Int) error {
 		} else if addr == l.cfg.genericHandlerContract {
 			m, err = l.handleGenericDepositedEvent(destId, nonce)
 		} else {
-			l.log.Error("event has unrecognized handler", "handler", addr.Hex())
+			l.log.Error("event has unrecognized handler", "handler", addr.Hex(), "config Addr", l.cfg.erc20HandlerContract.Hex())
 			return nil
 		}
 

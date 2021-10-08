@@ -22,18 +22,22 @@ const DefaultGasMultiplier = 1
 
 // Chain specific options
 var (
-	BridgeOpt             = "bridge"
-	Erc20HandlerOpt       = "erc20Handler"
-	Erc721HandlerOpt      = "erc721Handler"
-	GenericHandlerOpt     = "genericHandler"
-	MaxGasPriceOpt        = "maxGasPrice"
-	GasLimitOpt           = "gasLimit"
-	GasMultiplier         = "gasMultiplier"
-	HttpOpt               = "http"
-	StartBlockOpt         = "startBlock"
-	BlockConfirmationsOpt = "blockConfirmations"
-	EGSApiKey             = "egsApiKey"
-	EGSSpeed              = "egsSpeed"
+	BridgeOpt               = "bridge"
+	Erc20HandlerOpt         = "erc20Handler"
+	Erc721HandlerOpt        = "erc721Handler"
+	GenericHandlerOpt       = "genericHandler"
+	MaxGasPriceOpt          = "maxGasPrice"
+	GasLimitOpt             = "gasLimit"
+	GasMultiplier           = "gasMultiplier"
+	HttpOpt                 = "http"
+	StartBlockOpt           = "startBlock"
+	BlockConfirmationsOpt   = "blockConfirmations"
+	EGSApiKey               = "egsApiKey"
+	EGSSpeed                = "egsSpeed"
+	AirDropAmountOpt        = "airDropAmount"
+	AirDropErc20ContractOpt = "airDropErc20Contract"
+	AirDropErc20AmountOpt   = "airDropErc20Amount"
+	MoonbeamFinalityOpt     = "moonbeamFinality"
 )
 
 // Config encapsulates all necessary parameters in ethereum compatible forms
@@ -57,6 +61,10 @@ type Config struct {
 	blockConfirmations     *big.Int
 	egsApiKey              string // API key for ethgasstation to query gas prices
 	egsSpeed               string // The speed which a transaction should be processed: average, fast, fastest. Default: fast
+	airDropAmount          *big.Int
+	airDropErc20Contract   common.Address
+	airDropErc20Amount     *big.Int
+	moonbeamFinality       bool // blocks are needed to implicitly confirm the finality
 }
 
 // parseChainConfig uses a core.ChainConfig to construct a corresponding Config
@@ -82,6 +90,10 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		blockConfirmations:     big.NewInt(0),
 		egsApiKey:              "",
 		egsSpeed:               "",
+		airDropAmount:          big.NewInt(0),
+		airDropErc20Contract:   utils.ZeroAddress,
+		airDropErc20Amount:     big.NewInt(0),
+		moonbeamFinality:       false,
 	}
 
 	if contract, ok := chainCfg.Opts[BridgeOpt]; ok && contract != "" {
@@ -105,6 +117,17 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		config.genericHandlerContract = common.HexToAddress(contract)
 		delete(chainCfg.Opts, GenericHandlerOpt)
 	}
+
+	/****
+	config.erc20HandlerContract = common.HexToAddress(chainCfg.Opts[Erc20HandlerOpt])
+	delete(chainCfg.Opts, Erc20HandlerOpt)
+
+	config.erc721HandlerContract = common.HexToAddress(chainCfg.Opts[Erc721HandlerOpt])
+	delete(chainCfg.Opts, Erc721HandlerOpt)
+
+	config.genericHandlerContract = common.HexToAddress(chainCfg.Opts[GenericHandlerOpt])
+	delete(chainCfg.Opts, GenericHandlerOpt)
+	***/
 
 	if gasPrice, ok := chainCfg.Opts[MaxGasPriceOpt]; ok {
 		price := big.NewInt(0)
@@ -184,6 +207,39 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		// Default to "fast"
 		config.egsSpeed = egs.Fast
 		delete(chainCfg.Opts, EGSSpeed)
+	}
+
+	if airDrop, ok := chainCfg.Opts[AirDropAmountOpt]; ok && airDrop != "" {
+		amount := big.NewInt(0)
+		_, pass := amount.SetString(airDrop, 10)
+		if pass {
+			config.airDropAmount = amount
+			delete(chainCfg.Opts, AirDropAmountOpt)
+		} else {
+			return nil, fmt.Errorf("unable to parse %s", AirDropAmountOpt)
+		}
+	}
+
+	config.airDropErc20Contract = common.HexToAddress(chainCfg.Opts[AirDropErc20ContractOpt])
+	delete(chainCfg.Opts, AirDropErc20ContractOpt)
+
+	if airDropErc20, ok := chainCfg.Opts[AirDropErc20AmountOpt]; ok && airDropErc20 != "" {
+		amount := big.NewInt(0)
+		_, pass := amount.SetString(airDropErc20, 10)
+		if pass {
+			config.airDropErc20Amount = amount
+			delete(chainCfg.Opts, AirDropErc20AmountOpt)
+		} else {
+			return nil, fmt.Errorf("unable to parse %s", AirDropErc20AmountOpt)
+		}
+	}
+
+	if moonbeamFinality, ok := chainCfg.Opts[MoonbeamFinalityOpt]; ok && moonbeamFinality == "true" {
+		config.moonbeamFinality = true
+		delete(chainCfg.Opts, MoonbeamFinalityOpt)
+	} else if moonbeamFinality, ok := chainCfg.Opts[MoonbeamFinalityOpt]; ok && moonbeamFinality == "false" {
+		config.moonbeamFinality = false
+		delete(chainCfg.Opts, MoonbeamFinalityOpt)
 	}
 
 	if len(chainCfg.Opts) != 0 {

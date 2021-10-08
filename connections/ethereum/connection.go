@@ -5,6 +5,7 @@ package ethereum
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -24,15 +25,18 @@ import (
 var BlockRetryInterval = time.Second * 5
 
 type Connection struct {
-	endpoint      string
-	http          bool
-	kp            *secp256k1.Keypair
-	gasLimit      *big.Int
-	maxGasPrice   *big.Int
-	gasMultiplier *big.Float
-	egsApiKey     string
-	egsSpeed      string
-	conn          *ethclient.Client
+	endpoint         string
+	http             bool
+	kp               *secp256k1.Keypair
+	gasLimit         *big.Int
+	maxGasPrice      *big.Int
+	gasMultiplier    *big.Float
+	egsApiKey        string
+	egsSpeed         string
+	moonbeamFinality bool
+	conn             *ethclient.Client
+	connRPC          *rpc.Client
+
 	// signer    ethtypes.Signer
 	opts     *bind.TransactOpts
 	callOpts *bind.CallOpts
@@ -43,18 +47,19 @@ type Connection struct {
 }
 
 // NewConnection returns an uninitialized connection, must call Connection.Connect() before using.
-func NewConnection(endpoint string, http bool, kp *secp256k1.Keypair, log log15.Logger, gasLimit, gasPrice *big.Int, gasMultiplier *big.Float, gsnApiKey, gsnSpeed string) *Connection {
+func NewConnection(endpoint string, http bool, kp *secp256k1.Keypair, log log15.Logger, gasLimit, gasPrice *big.Int, gasMultiplier *big.Float, gsnApiKey, gsnSpeed string, moonbeamFinality bool) *Connection {
 	return &Connection{
-		endpoint:      endpoint,
-		http:          http,
-		kp:            kp,
-		gasLimit:      gasLimit,
-		maxGasPrice:   gasPrice,
-		gasMultiplier: gasMultiplier,
-		egsApiKey:     gsnApiKey,
-		egsSpeed:      gsnSpeed,
-		log:           log,
-		stop:          make(chan int),
+		endpoint:         endpoint,
+		http:             http,
+		kp:               kp,
+		gasLimit:         gasLimit,
+		maxGasPrice:      gasPrice,
+		gasMultiplier:    gasMultiplier,
+		egsApiKey:        gsnApiKey,
+		egsSpeed:         gsnSpeed,
+		moonbeamFinality: moonbeamFinality,
+		log:              log,
+		stop:             make(chan int),
 	}
 }
 
@@ -73,6 +78,7 @@ func (c *Connection) Connect() error {
 		return err
 	}
 	c.conn = ethclient.NewClient(rpcClient)
+	c.connRPC = rpcClient
 
 	// Construct tx opts, call opts, and nonce mechanism
 	opts, _, err := c.newTransactOpts(big.NewInt(0), c.gasLimit, c.maxGasPrice)
@@ -223,13 +229,26 @@ func (c *Connection) LockAndUpdateOpts() error {
 
 	if head.BaseFee != nil {
 		c.opts.GasTipCap, c.opts.GasFeeCap, err = c.EstimateGasLondon(context.TODO(), head.BaseFee)
-		if err != nil {
-			c.UnlockOpts()
-			return err
+		if err == nil {
+			// Both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) cannot be specified: https://github.com/ethereum/go-ethereum/blob/95bbd46eabc5d95d9fb2108ec232dd62df2f44ab/accounts/abi/bind/base.go#L254
+			c.opts.GasPrice = nil
+			c.log.Info("estimateGasLondon...", "GasTipCap", c.opts.GasTipCap.String(), "GasFeeCap", c.opts.GasFeeCap.String())
+		} else {
+			c.log.Info("estimateGasLondon failed", "error", err)
+			if err.Error() == "Method not found" {
+				var gasPrice *big.Int
+				gasPrice, err = c.SafeEstimateGas(context.TODO())
+				if err != nil {
+					c.UnlockOpts()
+					return err
+				}
+				c.log.Info("SafeEstimateGas...", "gasPrice", gasPrice.String())
+				c.opts.GasPrice = gasPrice
+			} else {
+				c.UnlockOpts()
+				return err
+			}
 		}
-
-		// Both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) cannot be specified: https://github.com/ethereum/go-ethereum/blob/95bbd46eabc5d95d9fb2108ec232dd62df2f44ab/accounts/abi/bind/base.go#L254
-		c.opts.GasPrice = nil
 	} else {
 		var gasPrice *big.Int
 		gasPrice, err = c.SafeEstimateGas(context.TODO())
@@ -237,6 +256,7 @@ func (c *Connection) LockAndUpdateOpts() error {
 			c.UnlockOpts()
 			return err
 		}
+		c.log.Info("SafeEstimateGas...", "gasPrice", gasPrice.String())
 		c.opts.GasPrice = gasPrice
 	}
 
@@ -246,6 +266,7 @@ func (c *Connection) LockAndUpdateOpts() error {
 		return err
 	}
 	c.opts.Nonce.SetUint64(nonce)
+	c.log.Info("PendingNonceAt, get nonce.", "nonce", nonce)
 	return nil
 }
 
@@ -255,6 +276,10 @@ func (c *Connection) UnlockOpts() {
 
 // LatestBlock returns the latest block from the current chain
 func (c *Connection) LatestBlock() (*big.Int, error) {
+	if c.moonbeamFinality == true {
+		return c.LatestFinalizedBlock()
+	}
+
 	header, err := c.conn.HeaderByNumber(context.Background(), nil)
 	if err != nil {
 		return nil, err
@@ -309,4 +334,48 @@ func (c *Connection) Close() {
 		c.conn.Close()
 	}
 	close(c.stop)
+}
+
+//
+func (c *Connection) LatestFinalizedBlock() (*big.Int, error) {
+	var raw json.RawMessage
+	err := c.connRPC.CallContext(context.Background(), &raw, "chain_getFinalizedHead")
+	if err != nil {
+		c.log.Error("chain_getFinalizedHead failed", "error", err.Error())
+		return nil, err
+	}
+
+	// The hash is with double quote "", should remove
+	var blockHash string = string(raw)
+	blockHash = blockHash[1 : len(blockHash)-1]
+	//fmt.Println(blockHash)
+	err = c.connRPC.CallContext(context.Background(), &raw, "chain_getHeader", blockHash)
+	if err != nil {
+		c.log.Error("chain_getHeader failed", "error", err.Error())
+		return nil, err
+	}
+
+	var m map[string]interface{}
+	if err = json.Unmarshal(raw, &m); err != nil {
+		c.log.Error(err.Error())
+		return nil, err
+	}
+	if m == nil {
+		c.log.Error("body: empty body")
+		return nil, errors.New("body: empty body")
+	}
+
+	/***
+	for k, v := range m {
+		fmt.Println("decoding", k, v)
+	}
+	***/
+	number := m["number"].(string)
+	// remove 0x
+	number = number[2:]
+	num, ok := new(big.Int).SetString(number, 16)
+	if ok != true {
+		return nil, err
+	}
+	return num, nil
 }
