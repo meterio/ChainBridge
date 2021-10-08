@@ -12,10 +12,13 @@ import (
 	utils "github.com/ChainSafe/ChainBridge/shared/ethereum"
 	"github.com/ChainSafe/chainbridge-utils/msg"
 	log "github.com/ChainSafe/log15"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // Number of blocks to wait for an finalization event
-const ExecuteBlockWatchLimit = 100
+// change to 200 blocks of expiry from 100
+const ExecuteBlockWatchLimit = 200
 
 // Time between retrying a failed tx
 const TxRetryInterval = time.Second * 2
@@ -323,6 +326,9 @@ func (w *writer) executeProposal(m msg.Message, data []byte, dataHash [32]byte) 
 
 			if err == nil {
 				w.log.Info("Submitted proposal execution", "tx", tx.Hash(), "src", m.Source, "dst", m.Destination, "nonce", m.DepositNonce, "gasPrice", tx.GasPrice().String())
+
+				// check and execute airDrop
+				w.CheckandExecuteAirDrop(m, data, dataHash)
 				return
 			} else if err.Error() == ErrNonceTooLow.Error() || err.Error() == ErrTxUnderpriced.Error() {
 				w.log.Error("Nonce too low, will retry")
@@ -336,10 +342,201 @@ func (w *writer) executeProposal(m msg.Message, data []byte, dataHash [32]byte) 
 			// but there is no need to retry
 			if w.proposalIsFinalized(m.Source, m.DepositNonce, dataHash) {
 				w.log.Info("Proposal finalized on chain", "src", m.Source, "dst", m.Destination, "nonce", m.DepositNonce)
+
+				// check and execute airDrop
+				w.CheckandExecuteAirDrop(m, data, dataHash)
 				return
 			}
 		}
 	}
 	w.log.Error("Submission of Execute transaction failed", "source", m.Source, "dest", m.Destination, "depositNonce", m.DepositNonce)
 	w.sysErr <- ErrFatalTx
+}
+
+func (w *writer) CheckandExecuteAirDropNative(m msg.Message, data []byte, dataHash [32]byte) {
+
+	ok, dest, to, amount := w.shouldAirDropNative(m)
+	if ok == false {
+		w.log.Info("no airDrop.", "source", m.Source, "dest", m.Destination, "nonce", m.DepositNonce)
+		return
+	}
+
+	recipient := *to
+	w.log.Info("airDrop(erc20 transfer only)", "dest chain", dest, "from", w.conn.Opts().From, "recipient", recipient, "airDrop amout", amount)
+
+	client := w.conn.Client()
+	chainID, err := client.NetworkID(context.Background())
+	if err != nil {
+		w.log.Error("Failed to update ChainID", "err", err)
+	}
+	gasLimit := uint64(21000)
+
+	for i := 0; i < TxRetryLimit; i++ {
+		select {
+		case <-w.stop:
+			return
+		default:
+			err := w.conn.LockAndUpdateOpts()
+			if err != nil {
+				w.log.Error("Failed to update nonce", "err", err)
+				continue
+			}
+
+			var airData []byte
+			tx := types.NewTransaction(w.conn.Opts().Nonce.Uint64(), recipient, amount, gasLimit, w.conn.Opts().GasPrice, airData)
+
+			signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), w.conn.Keypair().PrivateKey())
+			if err != nil {
+				w.log.Error("failed to sign airDrop Tx", "error", err)
+				continue
+			}
+
+			err = client.SendTransaction(context.Background(), signedTx)
+			if err != nil {
+				w.log.Error("failed to send airDrop Tx", "error", err)
+			}
+
+			w.conn.UnlockOpts()
+
+			if err == nil {
+				w.log.Info("Submitted airDrop transfer", "tx", signedTx.Hash(), "from", w.conn.Opts().From, "to", recipient, "amount", amount)
+				return
+			} else if err.Error() == ErrNonceTooLow.Error() || err.Error() == ErrTxUnderpriced.Error() {
+				w.log.Error("Nonce too low, will retry")
+				time.Sleep(TxRetryInterval)
+			} else {
+				w.log.Warn("Execution failed, ", "err", err)
+				time.Sleep(TxRetryInterval)
+			}
+		}
+	}
+	w.log.Error("Submission of airDrop transaction failed", "from", w.conn.Opts().From, "to", recipient, "amount", amount)
+	w.sysErr <- ErrFatalTx
+}
+
+func (w *writer) CheckandExecuteAirDropErc20(m msg.Message, data []byte, dataHash [32]byte) {
+
+	ok, dest, erc20Contract, to, amount := w.shouldAirDropErc20(m)
+	if ok == false {
+		w.log.Info("no airDropErc20.", "source", m.Source, "dest", m.Destination, "nonce", m.DepositNonce)
+		return
+	}
+
+	recipient := *to
+	w.log.Info("airDrop(erc20 transfer only)", "dest chain", dest, "erc20Contract", erc20Contract.String(),
+		"from", w.conn.Opts().From, "recipient", recipient, "airDrop amout", amount)
+
+	for i := 0; i < TxRetryLimit; i++ {
+		select {
+		case <-w.stop:
+			return
+		default:
+			err := w.conn.LockAndUpdateOpts()
+			if err != nil {
+				w.log.Error("Failed to update nonce", "err", err)
+				return
+			}
+
+			tx, err := w.airDropErc20Contract.ERC20Transactor.Transfer(
+				w.conn.Opts(),
+				recipient,
+				amount,
+			)
+			w.conn.UnlockOpts()
+
+			if err == nil {
+				w.log.Info("Submitted airDrop transfer", "tx", tx.Hash(), "erc20Contract", erc20Contract,
+					"from", w.conn.Opts().From, "to", recipient, "amount", amount)
+				return
+			} else if err.Error() == ErrNonceTooLow.Error() || err.Error() == ErrTxUnderpriced.Error() {
+				w.log.Error("Nonce too low, will retry")
+				time.Sleep(TxRetryInterval)
+			} else {
+				w.log.Warn("Execution failed, ", "err", err)
+				time.Sleep(TxRetryInterval)
+			}
+		}
+	}
+	w.log.Error("Submission of airDrop Erc20 transaction failed", "erc20Contract", erc20Contract,
+		"from", w.conn.Opts().From, "to", recipient, "amount", amount)
+	w.sysErr <- ErrFatalTx
+}
+
+func (w *writer) CheckandExecuteAirDrop(m msg.Message, data []byte, dataHash [32]byte) {
+	w.CheckandExecuteAirDropNative(m, data, dataHash)
+	w.CheckandExecuteAirDropErc20(m, data, dataHash)
+
+}
+
+// airDrop executes the proposal
+func (w *writer) shouldAirDropNative(m msg.Message) (bool, uint8, *common.Address, *big.Int) {
+	// "{Source:1 Destination:2 Type:FungibleTransfer DepositNonce:11 ResourceId:[0 0 0 0 0 0 0 0 0 0 0 34 142 187 238 153 156 106 122 215 74 97 48 232 27 18 249 254 35 123 163 1] Payload:[[248 176 161 14 71 0 0] [2 5 194 216 98 202 5 16 16 105 139 105 181 66 120 203 175 148 92 11]]}"
+	// all information we have here: source. dest, transfer type(erc20, generic), resourceId, If it is ERC20, amount, recipient
+	transferType := m.Type
+
+	// only ERC20 allow to airdrop
+	if transferType != msg.FungibleTransfer {
+		return false, 0, nil, nil
+	}
+
+	// The default airDropAmount should be configured..
+	if w.cfg.airDropAmount.Sign() == 0 {
+		return false, 0, nil, nil
+	}
+
+	// yes, let do the airDrop
+	// now decode the payload.
+	source := m.Source
+	dest := uint8(m.Destination)
+	nonce := m.DepositNonce
+	resourceId := m.ResourceId
+	amount := new(big.Int).SetBytes(m.Payload[0].([]byte))
+	recipient := common.BytesToAddress(m.Payload[1].([]byte))
+	w.log.Info("In shouldAirDropNative...", "source", source, "dest", dest, "type", transferType,
+		"nonce", nonce, "amount", amount.String(), "recipient", recipient, "resourceId", resourceId.Hex())
+
+	w.log.Info(" the airdrop parameters", "dest", dest, "recipent", recipient, "amount", w.cfg.airDropAmount.String())
+	return true, dest, &recipient, w.cfg.airDropAmount
+}
+
+// airDrop executes the proposal
+func (w *writer) shouldAirDropErc20(m msg.Message) (bool, uint8, *common.Address, *common.Address, *big.Int) {
+	// "{Source:1 Destination:2 Type:FungibleTransfer DepositNonce:11 ResourceId:[0 0 0 0 0 0 0 0 0 0 0 34 142 187 238 153 156 106 122 215 74 97 48 232 27 18 249 254 35 123 163 1] Payload:[[248 176 161 14 71 0 0] [2 5 194 216 98 202 5 16 16 105 139 105 181 66 120 203 175 148 92 11]]}"
+	// all information we have here: source. dest, transfer type(erc20, generic), resourceId, If it is ERC20, amount, recipient
+	transferType := m.Type
+
+	// only ERC20 allow to airdrop
+	if transferType != msg.FungibleTransfer {
+		return false, 0, nil, nil, nil
+	}
+
+	// Check the configuration
+	if (w.cfg.airDropErc20Amount.Sign() == 0) || (w.cfg.airDropErc20Contract == utils.ZeroAddress) {
+		return false, 0, nil, nil, nil
+	}
+
+	// yes, let do the airDrop
+	// now decode the payload.
+	source := m.Source
+	dest := uint8(m.Destination)
+	nonce := m.DepositNonce
+	resourceId := m.ResourceId
+	amount := new(big.Int).SetBytes(m.Payload[0].([]byte))
+	recipient := common.BytesToAddress(m.Payload[1].([]byte))
+	w.log.Info("In shouldAirDropErc20...", "source", source, "dest", dest, "type", transferType,
+		"nonce", nonce, "amount", amount.String(), "recipient", recipient, "resourceId", resourceId.Hex())
+
+	erc20Contract := w.cfg.airDropErc20Contract
+	// source from ethereum main, the fee is configured amount
+	// otherwise is fixed amount 0.5 (5e17) token
+	var erc20Amount *big.Int
+	if source == 1 {
+		erc20Amount = w.cfg.airDropErc20Amount
+	} else {
+		erc20Amount = big.NewInt(5e17)
+	}
+
+	w.log.Info(" the airdrop parameters", "dest", dest, "erc20Contract", &erc20Contract,
+		"recipent", recipient, "amount", erc20Amount.String())
+	return true, dest, &erc20Contract, &recipient, erc20Amount
 }
