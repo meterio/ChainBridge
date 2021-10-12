@@ -115,6 +115,7 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		delete(chainCfg.Opts, GenericHandlerOpt)
 	}
 
+	/****
 	config.erc20HandlerContract = common.HexToAddress(chainCfg.Opts[Erc20HandlerOpt])
 	delete(chainCfg.Opts, Erc20HandlerOpt)
 
@@ -123,6 +124,7 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 
 	config.genericHandlerContract = common.HexToAddress(chainCfg.Opts[GenericHandlerOpt])
 	delete(chainCfg.Opts, GenericHandlerOpt)
+	***/
 
 	if gasPrice, ok := chainCfg.Opts[MaxGasPriceOpt]; ok {
 		price := big.NewInt(0)
