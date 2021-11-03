@@ -15,7 +15,7 @@ import (
 )
 
 // Number of blocks to wait for an finalization event
-const ExecuteBlockWatchLimit = 100
+const ExecuteBlockWatchLimit = 500
 
 // Time between retrying a failed tx
 const TxRetryInterval = time.Second * 2
@@ -297,9 +297,9 @@ func (w *writer) voteProposal(m msg.Message, dataHash [32]byte) {
 
 // executeProposal executes the proposal
 func (w *writer) executeProposal(m msg.Message, data []byte, dataHash [32]byte) {
-    // the relayer only acting as the validator and not acting as executor.
-    // the executor must be assinged  >=2 to avoid single point failure.
-    return
+	// the relayer only acting as the validator and not acting as executor.
+	// the executor must be assinged  >=2 to avoid single point failure.
+	return
 	for i := 0; i < TxRetryLimit; i++ {
 		select {
 		case <-w.stop:
