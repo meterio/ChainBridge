@@ -226,6 +226,7 @@ func (c *Connection) LockAndUpdateOpts() error {
 		if err == nil {
 			// Both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) cannot be specified: https://github.com/ethereum/go-ethereum/blob/95bbd46eabc5d95d9fb2108ec232dd62df2f44ab/accounts/abi/bind/base.go#L254
 			c.opts.GasPrice = nil
+			c.log.Info("estimateGasLondon...", "GasTipCap", c.opts.GasTipCap.String(), "GasFeeCap", c.opts.GasFeeCap.String())
 		} else {
 			c.log.Info("estimateGasLondon failed", "error", err)
 			if err.Error() == "Method not found" {
@@ -235,6 +236,7 @@ func (c *Connection) LockAndUpdateOpts() error {
 					c.UnlockOpts()
 					return err
 				}
+				c.log.Info("SafeEstimateGas...", "gasPrice", gasPrice.String())
 				c.opts.GasPrice = gasPrice
 			} else {
 				c.UnlockOpts()
@@ -248,6 +250,7 @@ func (c *Connection) LockAndUpdateOpts() error {
 			c.UnlockOpts()
 			return err
 		}
+		c.log.Info("SafeEstimateGas...", "gasPrice", gasPrice.String())
 		c.opts.GasPrice = gasPrice
 	}
 
