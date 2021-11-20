@@ -37,6 +37,7 @@ var (
 	AirDropAmountOpt        = "airDropAmount"
 	AirDropErc20ContractOpt = "airDropErc20Contract"
 	AirDropErc20AmountOpt   = "airDropErc20Amount"
+	MoonbeamFinalityOpt     = "moonbeamFinality"
 )
 
 // Config encapsulates all necessary parameters in ethereum compatible forms
@@ -63,6 +64,7 @@ type Config struct {
 	airDropAmount          *big.Int
 	airDropErc20Contract   common.Address
 	airDropErc20Amount     *big.Int
+	moonbeamFinality       bool // blocks are needed to implicitly confirm the finality
 }
 
 // parseChainConfig uses a core.ChainConfig to construct a corresponding Config
@@ -91,6 +93,7 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		airDropAmount:          big.NewInt(0),
 		airDropErc20Contract:   utils.ZeroAddress,
 		airDropErc20Amount:     big.NewInt(0),
+		moonbeamFinality:       false,
 	}
 
 	if contract, ok := chainCfg.Opts[BridgeOpt]; ok && contract != "" {
@@ -229,6 +232,14 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		} else {
 			return nil, fmt.Errorf("unable to parse %s", AirDropErc20AmountOpt)
 		}
+	}
+
+	if moonbeamFinality, ok := chainCfg.Opts[MoonbeamFinalityOpt]; ok && moonbeamFinality == "true" {
+		config.moonbeamFinality = true
+		delete(chainCfg.Opts, MoonbeamFinalityOpt)
+	} else if moonbeamFinality, ok := chainCfg.Opts[MoonbeamFinalityOpt]; ok && moonbeamFinality == "false" {
+		config.moonbeamFinality = false
+		delete(chainCfg.Opts, MoonbeamFinalityOpt)
 	}
 
 	if len(chainCfg.Opts) != 0 {

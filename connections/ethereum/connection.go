@@ -5,6 +5,7 @@ package ethereum
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -33,6 +34,8 @@ type Connection struct {
 	egsApiKey     string
 	egsSpeed      string
 	conn          *ethclient.Client
+	connRPC       *rpc.Client
+
 	// signer    ethtypes.Signer
 	opts     *bind.TransactOpts
 	callOpts *bind.CallOpts
@@ -73,6 +76,7 @@ func (c *Connection) Connect() error {
 		return err
 	}
 	c.conn = ethclient.NewClient(rpcClient)
+	c.connRPC = rpcClient
 
 	// Construct tx opts, call opts, and nonce mechanism
 	opts, _, err := c.newTransactOpts(big.NewInt(0), c.gasLimit, c.maxGasPrice)
@@ -323,4 +327,48 @@ func (c *Connection) Close() {
 		c.conn.Close()
 	}
 	close(c.stop)
+}
+
+//
+func (c *Connection) LatestFinalizedBlock() (*big.Int, error) {
+	var raw json.RawMessage
+	err := c.connRPC.CallContext(context.Background(), &raw, "chain_getFinalizedHead")
+	if err != nil {
+		c.log.Error("chain_getFinalizedHead failed", "error", err.Error())
+		return nil, err
+	}
+
+	// The hash is with double quote "", should remove
+	var blockHash string = string(raw)
+	blockHash = blockHash[1 : len(blockHash)-1]
+	//fmt.Println(blockHash)
+	err = c.connRPC.CallContext(context.Background(), &raw, "chain_getHeader", blockHash)
+	if err != nil {
+		c.log.Error("chain_getHeader failed", "error", err.Error())
+		return nil, err
+	}
+
+	var m map[string]interface{}
+	if err = json.Unmarshal(raw, &m); err != nil {
+		c.log.Error(err.Error())
+		return nil, err
+	}
+	if m == nil {
+		c.log.Error("body: empty body")
+		return nil, errors.New("body: empty body")
+	}
+
+	/***
+	for k, v := range m {
+		fmt.Println("decoding", k, v)
+	}
+	***/
+	number := m["number"].(string)
+	// remove 0x
+	number = number[2:]
+	num, ok := new(big.Int).SetString(number, 16)
+	if ok != true {
+		return nil, err
+	}
+	return num, nil
 }
