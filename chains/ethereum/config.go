@@ -34,6 +34,7 @@ var (
 	BlockConfirmationsOpt = "blockConfirmations"
 	EGSApiKey             = "egsApiKey"
 	EGSSpeed              = "egsSpeed"
+	MoonbeamFinalityOpt   = "moonbeamFinality"
 )
 
 // Config encapsulates all necessary parameters in ethereum compatible forms
@@ -57,6 +58,7 @@ type Config struct {
 	blockConfirmations     *big.Int
 	egsApiKey              string // API key for ethgasstation to query gas prices
 	egsSpeed               string // The speed which a transaction should be processed: average, fast, fastest. Default: fast
+	moonbeamFinality       bool   // blocks are needed to implicitly confirm the finality
 }
 
 // parseChainConfig uses a core.ChainConfig to construct a corresponding Config
@@ -82,6 +84,7 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		blockConfirmations:     big.NewInt(0),
 		egsApiKey:              "",
 		egsSpeed:               "",
+		moonbeamFinality:       false,
 	}
 
 	if contract, ok := chainCfg.Opts[BridgeOpt]; ok && contract != "" {
@@ -184,6 +187,14 @@ func parseChainConfig(chainCfg *core.ChainConfig) (*Config, error) {
 		// Default to "fast"
 		config.egsSpeed = egs.Fast
 		delete(chainCfg.Opts, EGSSpeed)
+	}
+
+	if moonbeamFinality, ok := chainCfg.Opts[MoonbeamFinalityOpt]; ok && moonbeamFinality == "true" {
+		config.moonbeamFinality = true
+		delete(chainCfg.Opts, MoonbeamFinalityOpt)
+	} else if moonbeamFinality, ok := chainCfg.Opts[MoonbeamFinalityOpt]; ok && moonbeamFinality == "false" {
+		config.moonbeamFinality = false
+		delete(chainCfg.Opts, MoonbeamFinalityOpt)
 	}
 
 	if len(chainCfg.Opts) != 0 {
