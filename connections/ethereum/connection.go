@@ -25,16 +25,17 @@ import (
 var BlockRetryInterval = time.Second * 5
 
 type Connection struct {
-	endpoint      string
-	http          bool
-	kp            *secp256k1.Keypair
-	gasLimit      *big.Int
-	maxGasPrice   *big.Int
-	gasMultiplier *big.Float
-	egsApiKey     string
-	egsSpeed      string
-	conn          *ethclient.Client
-	connRPC       *rpc.Client
+	endpoint         string
+	http             bool
+	kp               *secp256k1.Keypair
+	gasLimit         *big.Int
+	maxGasPrice      *big.Int
+	gasMultiplier    *big.Float
+	egsApiKey        string
+	egsSpeed         string
+	moonbeamFinality bool
+	conn             *ethclient.Client
+	connRPC          *rpc.Client
 
 	// signer    ethtypes.Signer
 	opts     *bind.TransactOpts
@@ -46,18 +47,19 @@ type Connection struct {
 }
 
 // NewConnection returns an uninitialized connection, must call Connection.Connect() before using.
-func NewConnection(endpoint string, http bool, kp *secp256k1.Keypair, log log15.Logger, gasLimit, gasPrice *big.Int, gasMultiplier *big.Float, gsnApiKey, gsnSpeed string) *Connection {
+func NewConnection(endpoint string, http bool, kp *secp256k1.Keypair, log log15.Logger, gasLimit, gasPrice *big.Int, gasMultiplier *big.Float, gsnApiKey, gsnSpeed string, moonbeamFinality bool) *Connection {
 	return &Connection{
-		endpoint:      endpoint,
-		http:          http,
-		kp:            kp,
-		gasLimit:      gasLimit,
-		maxGasPrice:   gasPrice,
-		gasMultiplier: gasMultiplier,
-		egsApiKey:     gsnApiKey,
-		egsSpeed:      gsnSpeed,
-		log:           log,
-		stop:          make(chan int),
+		endpoint:         endpoint,
+		http:             http,
+		kp:               kp,
+		gasLimit:         gasLimit,
+		maxGasPrice:      gasPrice,
+		gasMultiplier:    gasMultiplier,
+		egsApiKey:        gsnApiKey,
+		egsSpeed:         gsnSpeed,
+		moonbeamFinality: moonbeamFinality,
+		log:              log,
+		stop:             make(chan int),
 	}
 }
 
@@ -273,6 +275,10 @@ func (c *Connection) UnlockOpts() {
 
 // LatestBlock returns the latest block from the current chain
 func (c *Connection) LatestBlock() (*big.Int, error) {
+	if c.moonbeamFinality == true {
+		return c.LatestFinalizedBlock()
+	}
+
 	header, err := c.conn.HeaderByNumber(context.Background(), nil)
 	if err != nil {
 		return nil, err
