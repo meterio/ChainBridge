@@ -110,11 +110,7 @@ func (l *listener) pollBlocks() error {
 
 			var latestBlock *big.Int
 			var err error
-			if l.cfg.moonbeamFinality {
-				latestBlock, err = l.conn.LatestFinalizedBlock()
-			} else {
-				latestBlock, err = l.conn.LatestBlock()
-			}
+			latestBlock, err = l.conn.LatestBlock()
 			if err != nil {
 				l.log.Error("Unable to get latest block", "block", currentBlock, "err", err)
 				retry--
