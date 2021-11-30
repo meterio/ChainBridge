@@ -266,6 +266,7 @@ func (c *Connection) LockAndUpdateOpts() error {
 		return err
 	}
 	c.opts.Nonce.SetUint64(nonce)
+	c.log.Info("PendingNonceAt, get nonce.", "nonce", nonce)
 	return nil
 }
 
